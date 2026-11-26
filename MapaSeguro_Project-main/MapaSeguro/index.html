@@ -1,0 +1,328 @@
+<!DOCTYPE html>
+<html lang="pt-BR" data-theme="light">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="theme-color" content="#ffffff">
+<meta name="color-scheme" content="light">
+<!-- Cara de app instalado (PWA): sem barra do navegador, status bar escura, sem links automáticos de telefone -->
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="Mapa Seguro">
+<meta name="format-detection" content="telephone=no">
+<meta name="description" content="Mapa de calor de violência urbana — Projeto Integrador (protótipo acadêmico com dados fictícios).">
+<title>Mapa de Violência Urbana</title>
+<!-- Tema salvo (claro ou escuro) aplicado ANTES de a página aparecer, para não piscar.
+     Padrão: claro. A troca é feita pelo botão sol/lua do mapa ou em "Aparência do mapa". -->
+<script>
+  (function(){
+    var t = 'light';
+    try{ if(localStorage.getItem('tema') === 'dark') t = 'dark'; }catch(e){}
+    document.documentElement.setAttribute('data-theme', t);
+    if(t === 'dark'){
+      document.querySelector('meta[name="theme-color"]').setAttribute('content', '#0b1018');
+      document.querySelector('meta[name="color-scheme"]').setAttribute('content', 'dark');
+    }
+  })();
+</script>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="assets/icons/icon-192.png">
+<link rel="apple-touch-icon" href="assets/icons/apple-touch-icon.png">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/maplibre-gl@5.6.2/dist/maplibre-gl.css">
+<!-- SweetAlert2 (item 3): o visual dele é sobrescrito em css/style.css para parecer alerta do sistema -->
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/sweetalert2@11/dist/sweetalert2.min.css">
+<link rel="stylesheet" href="css/style.css?v=aviso4">
+</head>
+<!-- is-loading: enquanto os dados carregam, os blocos marcados com .sk viram skeleton (item 2) -->
+<body class="is-loading">
+
+<!-- Mapa em tela cheia -->
+<div id="map" aria-label="Mapa de calor das ocorrências"></div>
+<div class="trips-caption" id="tripsCaption" hidden role="status">
+  <span class="trips-spark" aria-hidden="true"></span>
+  <span>Trajetos ilustrativos · simulação visual<br><small>Não representam trânsito, ocorrências ou rotas seguras.</small></span>
+  <button type="button" id="btnTripsPause" aria-pressed="false">Pausar</button>
+</div>
+<!-- Skeleton do mapa: some com fade quando o mapa base termina de carregar -->
+<div class="map-skeleton" id="mapSkeleton" aria-hidden="true"></div>
+
+<!-- Aviso de pessoas desaparecidas: pop-up de notificação minimalista que aparece quando a
+     consulta termina e mostra uma pessoa por vez, trocando a foto a cada 7 segundos (civic.js). -->
+<section id="missingSection" class="missing-notice" aria-labelledby="missingTitle" aria-roledescription="carrossel">
+  <header class="mn-head">
+    <span class="mn-icon" aria-hidden="true"></span>
+    <h2 id="missingTitle">Pessoas Desaparecidas <span class="mn-sr">em Cuiabá e Várzea Grande</span></h2>
+    <button type="button" class="mn-btn" id="missingClose" aria-label="Fechar aviso de pessoas desaparecidas" title="Fechar">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 7l10 10M17 7 7 17"/></svg>
+    </button>
+  </header>
+  <div id="missingSlide" class="mn-slide" aria-live="off" aria-atomic="true"></div>
+  <p id="missingStatus" role="status"></p>
+  <button type="button" id="missingRetry" class="mn-retry" hidden>Tentar de novo</button>
+  <footer class="mn-foot">
+    <button type="button" class="mn-more" id="openMissingDialog" aria-haspopup="dialog" aria-controls="missingDialog" aria-label="Ver mais pessoas desaparecidas em Mato Grosso">Ver mais <span aria-hidden="true">→</span></button>
+  </footer>
+  <!-- tempo até a próxima foto: traço fino na borda de baixo -->
+  <div class="mn-progress" id="missingProgress" aria-hidden="true"></div>
+</section>
+<dialog id="missingDialog" aria-labelledby="missingDialogTitle">
+  <header class="gallery-bar">
+    <div><h2 id="missingDialogTitle">Pessoas desaparecidas</h2><span>Mato Grosso · Polícia Civil</span></div>
+    <form method="dialog"><button aria-label="Fechar galeria">Fechar</button></form>
+  </header>
+  <div class="gallery-content">
+    <p id="popupStatus" role="status"></p>
+    <div id="popupResults" aria-label="Fichas de pessoas desaparecidas"></div>
+    <button type="button" id="popupRetry" hidden>Tentar de novo</button>
+    <button type="button" id="popupMore" hidden>Carregar mais</button>
+    <a href="https://desaparecidos.pjc.mt.gov.br/" target="_blank" rel="noopener">Fonte: Polícia Civil de MT ↗</a>
+  </div>
+</dialog>
+<!-- Marca (computador) -->
+<div class="brand">
+  <span class="brand-mark" aria-hidden="true"></span>
+  <div>
+    <h1>Mapa de Violência Urbana</h1>
+    <p>Cuiabá · dados fictícios</p>
+  </div>
+</div>
+
+<!-- Ações (canto superior direito) -->
+<div class="actions">
+  <!-- Reabre o aviso de pessoas desaparecidas depois que ele é fechado -->
+  <button type="button" class="fab missing-reopen" id="missingReopen" hidden aria-controls="missingSection" title="Pessoas desaparecidas" aria-label="Mostrar aviso de pessoas desaparecidas">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8" r="4"/><path d="M4.5 20.5a7.5 7.5 0 0 1 15 0"/></svg>
+    <span class="mn-dot" aria-hidden="true"></span>
+  </button>
+  <button type="button" class="fab" id="btnRefresh" title="Atualizar dados" aria-label="Atualizar dados">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11a8 8 0 1 0-2.3 5.7"/><path d="M20 4v7h-7"/></svg>
+  </button>
+</div>
+
+<!-- Controles do mapa (canto inferior direito): zoom + localização -->
+<div class="map-tools">
+  <button type="button" class="fab trips-toggle" id="btnTrips" title="Mostrar trajetos demonstrativos" aria-label="Mostrar trajetos demonstrativos" aria-pressed="false">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 18V9a4 4 0 0 1 8 0v6a3 3 0 0 0 6 0V6"/><circle cx="5" cy="19" r="2"/><circle cx="19" cy="4" r="2"/></svg>
+  </button>
+  <div class="zoom-group">
+    <button type="button" id="btnZoomIn" title="Aproximar" aria-label="Aproximar">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
+    </button>
+    <button type="button" id="btnZoomOut" title="Afastar" aria-label="Afastar">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14"/></svg>
+    </button>
+  </div>
+  <button type="button" class="fab locate" id="btnGeo" title="Ativar localização em tempo real" aria-label="Ativar localização em tempo real" aria-pressed="false">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3.2"/><circle cx="12" cy="12" r="7.5"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/></svg>
+  </button>
+</div>
+
+<!-- Localização em tempo real: indicador visível enquanto estiver ligada (RN-G3) -->
+<div class="geo-bar" id="geoBar" role="region" aria-label="Localização em tempo real" data-estado="desligado">
+  <span class="geo-dot" aria-hidden="true"></span>
+  <button type="button" class="geo-bar-text" id="geoBarText" title="Ver resumo do bairro">Localização ativa</button>
+  <button type="button" class="chip-btn blue" id="geoBarCenter" style="display:none;">Recentralizar</button>
+  <button type="button" class="chip-btn red" id="geoBarOff">Desativar</button>
+</div>
+
+<!-- Legenda (canto inferior esquerdo, computador) -->
+<div class="legend-card" aria-label="Legenda de intensidade">
+  <div class="legend-head"><span>Concentração de registros</span></div>
+  <div class="legend-bar"></div>
+  <div class="legend-labels"><span>Baixa</span><span>Alta</span></div>
+  <p class="legend-note" id="legendNote">Aproxime o mapa para ver cada ocorrência.</p>
+</div>
+
+<!-- Fundo escurecido quando a gaveta está aberta por inteiro (celular) -->
+<div class="scrim" id="sheetScrim" aria-hidden="true"></div>
+
+<!-- ============ GAVETA PRINCIPAL (inspirada no Waze / Apple Maps) ============
+     Celular (10/11): gaveta presa no TOPO, sempre na tela, baixinha, com a busca "Para onde?",
+     a chave do tema e os atalhos; PUXANDO PARA BAIXO (pela alça, pela busca ou pela barra)
+     ela abre até a metade ou quase inteira (componente UI.detentSheet, edge:'top').
+     Computador: painel fixo à esquerda (como o painel do Waze Live Map), com a busca no topo.
+     Conteúdo em seções agrupadas (.section / .list-group / .cell), como os Ajustes do iPhone. -->
+<aside class="sidebar" id="sidebar" aria-label="Busca, resumo e filtros">
+  <div class="sheet-handle" aria-hidden="true"></div>
+
+  <div class="sheet-top" id="sheetTop">
+    <!-- Linha da busca: campo + chave do tema (sempre à vista, no celular e no computador) -->
+    <div class="search-row">
+      <!-- Busca: campo de app com lupa e limpar (×). Sugestões: componente UI.suggest. -->
+      <div class="search" role="search" data-suggest-host>
+        <svg class="search-ico" viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+        <input type="text" id="searchInput" placeholder="Bairro ou endereço" autocomplete="off" autocapitalize="none" spellcheck="false" enterkeyhint="search" aria-label="Buscar bairro ou endereço">
+        <button type="button" class="search-clear" id="btnClearSearch" aria-label="Limpar busca" hidden>
+          <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="m9 9 6 6M15 9l-6 6"/></svg>
+        </button>
+        <kbd class="search-kbd" aria-hidden="true">/</kbd>
+        <button type="button" class="search-go" id="btnSearch" aria-label="Buscar" title="Buscar">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
+        </button>
+      </div>
+      <!-- Chave do tema (como um interruptor): claro = laranja com SOL; escuro = preto com LUA.
+           A bolinha branca desliza para o lado; ligada (à direita) = tema escuro. -->
+      <button type="button" class="theme-switch" id="btnTheme" role="switch" aria-checked="false"
+              aria-label="Tema escuro" title="Mudar para o tema escuro">
+        <span class="ts-track" aria-hidden="true">
+          <span class="ts-bg ts-bg-claro"></span>
+          <span class="ts-bg ts-bg-escuro"></span>
+          <svg class="ts-sol" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4.2"/><path d="M12 2.5v2.2M12 19.3v2.2M2.5 12h2.2M19.3 12h2.2M5.3 5.3l1.6 1.6M17.1 17.1l1.6 1.6M5.3 18.7l1.6-1.6M17.1 6.9l1.6-1.6"/></svg>
+          <svg class="ts-lua" viewBox="0 0 24 24"><path d="M19.6 14.9A7.9 7.9 0 0 1 9.1 4.4a7.9 7.9 0 1 0 10.5 10.5z"/></svg>
+          <span class="ts-knob"></span>
+        </span>
+      </button>
+    </div>
+    <!-- Filtro de bairro: aparece depois de buscar um bairro. O mapa mostra só as ocorrências dele. -->
+    <div class="bairro-chip" id="bairroChip" role="status" aria-live="polite">
+      <svg class="bairro-chip-ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16l-6 7.5V19l-4 1.5v-8z"/></svg>
+      <span class="bairro-chip-txt">Só <b id="bairroChipNome"></b></span>
+      <button type="button" class="bairro-chip-x" id="btnBairroChipClear" aria-label="Mostrar todos os bairros">Mostrar todos</button>
+    </div>
+    <!-- Atalhos (celular): como os atalhos "Casa / Trabalho" do Waze -->
+    <div class="quick-chips" role="toolbar" aria-label="Atalhos">
+      <button type="button" class="quick-chip" id="btnPanel" aria-expanded="false" aria-controls="panelBody">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M7 12h10M10 18h4"/></svg>
+        Filtros <span class="count-pill mono sk" id="countPill">0</span>
+      </button>
+      <button type="button" class="quick-chip" id="chipNearMe" title="Localizar minha posição no mapa">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3.2"/><circle cx="12" cy="12" r="7.5"/></svg>
+        Perto de mim
+      </button>
+      <button type="button" class="quick-chip" id="chipPeriod">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8"/><path d="M12 8v4l3 2"/></svg>
+        <span id="chipPeriodLabel">Todo o período</span>
+      </button>
+    </div>
+  </div>
+
+  <header class="nav-bar sheet-nav">
+    <button type="button" class="nav-btn" id="btnResetFilters" disabled>Limpar</button>
+    <h2 class="nav-title">Resumo e filtros</h2>
+    <span class="nav-end">
+      <button type="button" class="nav-btn icon only-desktop" id="btnCollapse" aria-expanded="true" aria-controls="panelBody" title="Recolher painel">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 15 6-6 6 6"/></svg>
+      </button>
+    </span>
+  </header>
+
+  <!-- cartão de resumo (estilo "saldo" de app de banco) -->
+  <div class="kpi-card">
+    <span class="kpi-label">Ocorrências no mapa</span>
+    <strong class="kpi-value mono sk" id="statTotal">0</strong>
+    <span class="kpi-sub"><span class="sk" id="periodLabel">Todo o período</span> · <span class="mono sk" id="updatedLabel"></span></span>
+  </div>
+
+  <!-- envoltório que anima a altura ao recolher/expandir (grid 1fr ↔ 0fr) -->
+  <div class="panel-collapse">
+  <div class="panel-body" id="panelBody">
+
+    <section class="section">
+      <h3 class="section-title">Localização</h3>
+      <div class="list-group">
+        <label class="cell switch-cell">
+          <span class="cell-ico"><span class="icon-tile blue" aria-hidden="true">
+            <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3.2"/><circle cx="12" cy="12" r="7.5"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/></svg>
+          </span></span>
+          <span class="cell-main">
+            <span class="cell-title">Localização em tempo real</span>
+            <span class="cell-sub geo-status" id="geoStatus" role="status" aria-live="polite"></span>
+            <span class="cell-sub geo-note">Registros a 1 km de você. Desative quando quiser.</span>
+          </span>
+          <input type="checkbox" class="switch" id="geoSwitch" aria-label="Localização em tempo real">
+        </label>
+      </div>
+    </section>
+
+    <details class="section civic"><summary>Rotas de carro</summary>
+      <div class="civic-body">
+        <p>Compare percursos usando as ocorrências fictícias do protótipo.</p>
+        <label>Partida<select id="routeFrom"></select></label>
+        <label>Destino<select id="routeTo"></select></label>
+        <small>Ao calcular, a partida e o destino serão enviados ao serviço de rotas OSRM.</small>
+        <label class="audio-choice"><input type="checkbox" id="routeSound" checked> Som do alerta</label>
+        <button type="button" id="calculateRoute">Comparar rotas</button>
+        <p id="routeMessage" role="status"></p><div id="routeOptions"></div>
+        <button type="button" id="clearRoute" hidden>Limpar percurso</button>
+      </div></details>
+    <section class="section" id="secPeriodo">
+      <h3 class="section-title">Período</h3>
+      <div class="segmented" id="presetRow" role="group" aria-label="Período">
+        <span class="seg-thumb" aria-hidden="true"></span>
+        <button type="button" class="preset" data-days="30">30 dias</button>
+        <button type="button" class="preset" data-days="90">90 dias</button>
+        <button type="button" class="preset" data-days="365">12 meses</button>
+        <button type="button" class="preset active" data-days="0">Tudo</button>
+        <button type="button" class="preset" data-days="custom" title="Escolher datas" aria-label="Escolher datas">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="5" width="16" height="15" rx="2"/><path d="M4 10h16M9 3v4M15 3v4"/></svg>
+        </button>
+      </div>
+      <div class="date-row hidden" id="dateRow">
+        <div class="field static compact"><input type="date" id="dateFrom" placeholder=" "><label for="dateFrom">De</label></div>
+        <div class="field static compact"><input type="date" id="dateTo" placeholder=" "><label for="dateTo">Até</label></div>
+      </div>
+    </section>
+
+    <section class="section">
+      <div class="section-head">
+        <h3 class="section-title">Tipo de ocorrência</h3>
+        <button type="button" class="link-btn hidden" id="btnClearTypes">Mostrar todos</button>
+      </div>
+      <div class="list-group type-list" id="typeChecks" role="group" aria-label="Filtrar por tipo"></div>
+      <p class="section-footer">Toque para filtrar. Sem seleção, todos os tipos aparecem.</p>
+    </section>
+
+    <section class="section">
+      <h3 class="section-title">Bairros com mais registros</h3>
+      <ol class="list-group rank" id="rankList"></ol>
+    </section>
+
+    <section class="section legend-mobile">
+      <h3 class="section-title">Concentração de registros</h3>
+      <div class="list-group legend-group">
+        <div class="legend-bar"></div>
+        <div class="legend-labels"><span>Baixa</span><span>Alta</span></div>
+      </div>
+    </section>
+
+    <p class="section-footer disclaimer"><strong>Aviso:</strong> protótipo acadêmico com registros fictícios. O mapa mostra concentração de registros, não prevê crimes.</p>
+  </div>
+  </div>
+</aside>
+
+<!-- Painel de detalhes: cartão no computador; gaveta com alça no celular -->
+<div class="detail-panel" id="detailPanel" role="dialog" aria-label="Detalhes">
+  <div class="sheet-grabber" aria-hidden="true"></div>
+  <button type="button" class="close" id="detailClose" aria-label="Fechar">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg>
+  </button>
+  <div id="detailContent" class="detail-content"></div>
+</div>
+
+<!-- Estado vazio: aparece quando os filtros não deixam nada no mapa -->
+<div class="empty-state" id="emptyState" role="status">
+  <span class="empty-ico" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5M8 11h6"/></svg></span>
+  <strong>Nada por aqui</strong>
+  <span>Nenhum registro para o período ou os tipos escolhidos.</span>
+  <button type="button" class="chip-btn blue" id="btnEmptyReset">Limpar filtros</button>
+</div>
+
+<!-- Região de aviso para leitores de tela. Se o SweetAlert2 não carregar (sem internet), vira o aviso visual. -->
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+<!-- MapLibre exibe os tiles oficiais do OpenStreetMap; deck.gl anima os trajetos. -->
+<script src="https://cdn.jsdelivr.net/npm/maplibre-gl@5.6.2/dist/maplibre-gl.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/deck.gl@9.1.14/dist.min.js"></script>
+<!-- SweetAlert2 (item 3) -->
+<script src="https://cdn.jsdelivr.net/npm/sweetalert2@11/dist/sweetalert2.min.js"></script>
+<!-- Componentes de interface com cara de app (alertas, toasts, skeleton, gestos, animações) -->
+<script src="js/ui.js"></script>
+<script src="js/map-config.js"></script>
+<script src="js/map-features.js"></script>
+<script src="js/map-trips.js"></script>
+<script src="js/civic.js?v=aviso4"></script>
+<script src="js/app.js?v=rua4"></script>
+</body>
+</html>
+
